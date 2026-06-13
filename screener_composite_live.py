@@ -95,25 +95,33 @@ if __name__ == "__main__":
     df_quality = screener.calculate_quality_factor(fundamentals_df)
     df_value = screener.calculate_value_factor(df_quality)
     
-    # 3. Generate Final Conviction List (50% Value, 50% Quality)
+    # 3. Generate Final Conviction List
     master_list = screener.generate_conviction_list(df_value, quality_weight=0.5, value_weight=0.5)
     
-    # 4. Display the Top 15 "Buy" Candidates
-    print("\n" + "="*80)
-    print(" 🏆 GSAM QUANTITATIVE SCREENER: TOP 15 CONVICTION BUYS 🏆")
-    print("="*80)
+    # --- NEW LOGIC: THE ESG / TRANSITION SPLIT ---
+    
+    # Filter the master list into two distinct dataframes
+    fossil_df = master_list[master_list['energy_type'] == 'Fossil'].copy()
+    clean_df = master_list[master_list['energy_type'].isin(['Renewable', 'Nuclear'])].copy()
     
     # Format the display cleanly
-    display_cols = ['ticker', 'company_name', 'energy_type', 'fcf_yield', 'quality_metric', 'composite_score']
+    display_cols = ['ticker', 'company_name', 'region', 'energy_type', 'fcf_yield', 'quality_metric', 'composite_score']
     
-    # Convert decimals to percentages for readability
-    master_list_display = master_list[display_cols].head(15).copy()
-    master_list_display['fcf_yield'] = (master_list_display['fcf_yield'] * 100).round(2).astype(str) + '%'
-    master_list_display['quality_metric'] = (master_list_display['quality_metric'] * 100).round(2).astype(str) + '%'
-    master_list_display['composite_score'] = (master_list_display['composite_score'] * 100).round(1)
-    
-    # Rename columns for the final printout
-    master_list_display.columns = ['Ticker', 'Company', 'Sector', 'Est. FCF Yield (Value)', 'ROA (Quality)', 'Conviction Score (0-100)']
-    
-    print(master_list_display.to_string(index=False))
-    print("\n*Note: FCF Yield is annualized based on the most recent quarter.")
+    def format_output(df: pd.DataFrame) -> pd.DataFrame:
+        df_disp = df[display_cols].head(10).copy()
+        df_disp['fcf_yield'] = (df_disp['fcf_yield'] * 100).round(2).astype(str) + '%'
+        df_disp['quality_metric'] = (df_disp['quality_metric'] * 100).round(2).astype(str) + '%'
+        df_disp['composite_score'] = (df_disp['composite_score'] * 100).round(1)
+        df_disp.columns = ['Ticker', 'Company', 'Region', 'Type', 'FCF Yield', 'ROA', 'Conviction']
+        return df_disp
+
+    # 4. Display the Two Distinct Portfolios
+    print("\n" + "="*85)
+    print(" 🛢️  TRADITIONAL FOSSIL PORTFOLIO: TOP 10 CONVICTION BUYS")
+    print("="*85)
+    print(format_output(fossil_df).to_string(index=False))
+
+    print("\n" + "="*85)
+    print(" ⚡  CLEAN ENERGY TRANSITION PORTFOLIO: TOP 10 CONVICTION BUYS")
+    print("="*85)
+    print(format_output(clean_df).to_string(index=False))

@@ -2,6 +2,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import logging
+import yfinance as yf
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -12,6 +13,7 @@ class VectorizedBacktester:
         self.conn = sqlite3.connect(db_path)
         self.prices = pd.DataFrame()
         self.fundamentals = pd.DataFrame()
+        self.sp500_prices = pd.Series(dtype=float) # NEW: Storage for the benchmark
 
     def load_data(self):
         """Loads all historical data and applies Point-in-Time lag."""
@@ -19,6 +21,21 @@ class VectorizedBacktester:
         self.prices = pd.read_sql_query("SELECT * FROM daily_prices", self.conn)
         self.prices['date'] = pd.to_datetime(self.prices['date'])
         self.prices.set_index(['date', 'ticker'], inplace=True)
+
+        logger.info("Fetching S&P 500 (SPY) benchmark data from Yahoo Finance...")
+        # Fetching SPY to act as our real-world tradable benchmark
+        spy_data = yf.download('SPY', start='2021-01-01', end='2026-12-31', progress=False)
+        if isinstance(spy_data.columns, pd.MultiIndex):
+            spy_data.columns = spy_data.columns.get_level_values(0)
+        
+        # Remove timezone data to match our SQLite database format perfectly
+        spy_data.index = spy_data.index.tz_localize(None)
+        
+        # Fallback to Close if Adj Close is missing
+        if 'Adj Close' in spy_data.columns:
+            self.sp500_prices = spy_data['Adj Close']
+        else:
+            self.sp500_prices = spy_data['Close']
 
         logger.info("Loading fundamentals and applying 45-day Look-Ahead Bias lag...")
         query = """
@@ -29,7 +46,7 @@ class VectorizedBacktester:
         self.fundamentals = pd.read_sql_query(query, self.conn)
         self.fundamentals['fiscal_date_ending'] = pd.to_datetime(self.fundamentals['fiscal_date_ending'])
         
-        # STRICT POINT-IN-TIME LOGIC: The market doesn't see earnings until ~45 days later
+        # STRICT POINT-IN-TIME LOGIC
         self.fundamentals['effective_date'] = self.fundamentals['fiscal_date_ending'] + pd.Timedelta(days=45)
         self.fundamentals = self.fundamentals.sort_values('effective_date')
 
@@ -72,24 +89,28 @@ class VectorizedBacktester:
             top_clean = clean_universe.nlargest(10, 'score')['ticker'].tolist()
             
             # 4. Calculate Forward 1-Month Return for these stocks
+            # 4. Calculate Forward 1-Month Return for these stocks
             try:
                 current_prices = self.prices.loc[current_date]['adj_close']
                 next_prices = self.prices.loc[next_date]['adj_close']
                 returns = (next_prices - current_prices) / current_prices
-                
-                # Equal weight portfolio returns
                 fossil_ret = returns.reindex(top_fossil).mean()
                 clean_ret = returns.reindex(top_clean).mean()
-                benchmark_ret = returns.mean() # Simple universe average as benchmark
+                
+                # NEW: Calculate exact S&P 500 return for this specific month
+                # We use .loc[:date].iloc[-1] to grab the "last known price" safely
+                current_spy = self.sp500_prices.loc[:current_date].iloc[-1]
+                next_spy = self.sp500_prices.loc[:next_date].iloc[-1]
+                benchmark_ret = (next_spy - current_spy) / current_spy
                 
                 portfolio_returns.append({
                     'date': next_date,
                     'Fossil_Top10': fossil_ret if pd.notna(fossil_ret) else 0,
                     'Clean_Top10': clean_ret if pd.notna(clean_ret) else 0,
-                    'Benchmark': benchmark_ret if pd.notna(benchmark_ret) else 0
+                    'S&P_500_Benchmark': benchmark_ret if pd.notna(benchmark_ret) else 0
                 })
-            except KeyError:
-                continue # Skip if dates don't align perfectly in database
+            except Exception as e:
+                continue # Skip if dates don't align perfectly
 
         return pd.DataFrame(portfolio_returns).set_index('date')
 
@@ -121,7 +142,7 @@ class VectorizedBacktester:
             }
             
         print("\n" + "="*70)
-        print(" 📊 GSAM QUANTITATIVE BACKTEST: 5-YEAR TEARSHEET 📊")
+        print(" 📊 QUANTITATIVE BACKTEST: 5-YEAR TEARSHEET 📊")
         print("="*70)
         print(pd.DataFrame(metrics).T.to_string())
 

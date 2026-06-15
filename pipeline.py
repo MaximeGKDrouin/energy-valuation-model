@@ -168,16 +168,18 @@ class EnergyDataPipeline:
                                     val = df.loc[label, date_obj]
                                     if isinstance(val, pd.Series):
                                         val = val.iloc[0]
-                                    return float(val) if pd.notna(val) else 0.0
+                                    # Return None (SQL NULL) which pandas natively loads as np.nan
+                                    return float(val) if pd.notna(val) else None
                                 except KeyError:
-                                    return 0.0
-                            return 0.0
+                                    return None
+                            return None
 
                         ebit = get_metric(is_q, 'EBIT')
                         total_assets = get_metric(bs_q, 'Total Assets')
                         cash = get_metric(bs_q, 'Cash And Cash Equivalents')
                         ocf = get_metric(cf_q, 'Operating Cash Flow')
-                        capex = abs(get_metric(cf_q, 'Capital Expenditure')) 
+                        capex_raw = get_metric(cf_q, 'Capital Expenditure')
+                        capex = abs(capex_raw) if capex_raw is not None else None
                         net_income = get_metric(is_q, 'Net Income')
                         revenue = get_metric(is_q, 'Total Revenue')
 
